@@ -741,6 +741,8 @@ void __sock_recv_timestamp(struct msghdr *msg, struct sock *sk,
 	    !skb_is_swtx_tstamp(skb, false_tstamp) &&
 	    ktime_to_timespec_cond(shhwtstamps->hwtstamp, tss.ts + 2)) {
 		empty = 0;
+		tss.tsh[0].tv_nsec = shhwtstamps->hwtstamp;
+		tss.tsh[0].tv_frac = shhwtstamps->hwtsfrac;
 		if ((sk->sk_tsflags & SOF_TIMESTAMPING_OPT_PKTINFO) &&
 		    !skb_is_err_queue(skb))
 			put_ts_pktinfo(msg, skb);
