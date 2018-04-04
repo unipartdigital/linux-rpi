@@ -27,6 +27,13 @@ struct itimerspec64 {
 	struct timespec64 it_value;
 };
 
+struct timehires {
+	__s64		tv_nsec;		/* nanoseconds */
+	__u32		tv_frac;		/* fractional ns */
+	__u32		__res;
+};
+#define HAVE_TIMEHIRES
+
 /* Parameters used to convert the timespec values: */
 #define MSEC_PER_SEC	1000L
 #define USEC_PER_MSEC	1000L
