@@ -39,6 +39,7 @@ struct sock_extended_err {
  */
 struct scm_timestamping {
 	struct timespec ts[3];
+	struct timehires tsh[1];
 };
 
 /* The type of scm_timestamping, passed in sock_extended_err ee_info.
