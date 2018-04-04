@@ -399,7 +399,9 @@ static inline bool skb_frag_must_loop(struct page *p)
  */
 struct skb_shared_hwtstamps {
 	ktime_t	hwtstamp;
+	ktime_frac_t hwtsfrac;
 };
+#define HAVE_HWTSFRAC
 
 /* Definitions for tx_flags in struct skb_shared_info */
 enum {
