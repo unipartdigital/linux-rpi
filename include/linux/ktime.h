@@ -26,6 +26,8 @@
 
 /* Nanosecond scalar representation for kernel time values */
 typedef s64	ktime_t;
+typedef u32	ktime_frac_t;
+
 
 /**
  * ktime_set - Set a ktime_t variable from a seconds/nanoseconds value
