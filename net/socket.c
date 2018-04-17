@@ -743,6 +743,7 @@ void __sock_recv_timestamp(struct msghdr *msg, struct sock *sk,
 		empty = 0;
 		tss.tsh[0].tv_nsec = shhwtstamps->hwtstamp;
 		tss.tsh[0].tv_frac = shhwtstamps->hwtsfrac;
+		memcpy(tss.hwtsinfo, shhwtstamps->hwtsinfo, sizeof(tss.hwtsinfo));
 		if ((sk->sk_tsflags & SOF_TIMESTAMPING_OPT_PKTINFO) &&
 		    !skb_is_err_queue(skb))
 			put_ts_pktinfo(msg, skb);
