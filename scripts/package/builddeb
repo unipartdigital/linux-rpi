@@ -117,6 +117,12 @@ um)
 parisc|mips|powerpc)
 	installed_image_path="boot/vmlinux-$version"
 	;;
+arm64)
+	installed_image_path="boot/kernel8.img"
+	;;
+arm)
+	installed_image_path="boot/kernel7.img"
+	;;
 *)
 	installed_image_path="boot/vmlinuz-$version"
 esac
@@ -126,8 +132,8 @@ BUILD_DEBUG="$(grep -s '^CONFIG_DEBUG_INFO=y' $KCONFIG_CONFIG || true)"
 # Setup the directory structure
 rm -rf "$tmpdir" "$kernel_headers_dir" "$libc_headers_dir" "$dbg_dir" $objtree/debian/files
 mkdir -m 755 -p "$tmpdir/DEBIAN"
-mkdir -p "$tmpdir/lib" "$tmpdir/boot"
-mkdir -p "$kernel_headers_dir/lib/modules/$version/"
+mkdir -p "$tmpdir/lib" "$tmpdir/boot" "$tmpdir/lib/modules/$version"
+mkdir -p "$kernel_headers_dir/lib/modules/$version"
 
 # Build and install the kernel
 if [ "$ARCH" = "um" ] ; then
@@ -136,18 +142,19 @@ if [ "$ARCH" = "um" ] ; then
 	cp System.map "$tmpdir/usr/lib/uml/modules/$version/System.map"
 	cp $KCONFIG_CONFIG "$tmpdir/usr/share/doc/$packagename/config"
 	gzip "$tmpdir/usr/share/doc/$packagename/config"
-else
-	cp System.map "$tmpdir/boot/System.map-$version"
-	cp $KCONFIG_CONFIG "$tmpdir/boot/config-$version"
 fi
 cp "$($MAKE -s image_name)" "$tmpdir/$installed_image_path"
 
 if grep -q "^CONFIG_OF=y" $KCONFIG_CONFIG ; then
 	# Only some architectures with OF support have this target
 	if grep -q dtbs_install "${srctree}/arch/$SRCARCH/Makefile"; then
-		$MAKE KBUILD_SRC= INSTALL_DTBS_PATH="$tmpdir/usr/lib/$packagename" dtbs_install
+		$MAKE KBUILD_SRC= INSTALL_DTBS_PATH="$tmpdir/boot" dtbs_install
 	fi
 fi
+
+bootfiles=$(cd "$tmpdir" && find boot -type f | sort)
+tar --create --xz --file="$tmpdir/lib/modules/$version/boot.txz" --directory="$tmpdir" $bootfiles
+rm -rf "$tmpdir/boot"
 
 if grep -q '^CONFIG_MODULES=y' $KCONFIG_CONFIG ; then
 	INSTALL_MOD_PATH="$tmpdir" $MAKE KBUILD_SRC= modules_install
@@ -175,6 +182,8 @@ if grep -q '^CONFIG_MODULES=y' $KCONFIG_CONFIG ; then
 			INSTALL_MOD_PATH="$tmpdir" $MAKE KBUILD_SRC= modules_sign
 		fi
 	fi
+	cp System.map "$tmpdir/lib/modules/$version/System.map"
+	cp $KCONFIG_CONFIG "$tmpdir/lib/modules/$version/config"
 fi
 
 if [ "$ARCH" != "um" ]; then
@@ -203,10 +212,29 @@ set -e
 # Pass maintainer script parameters to hook scripts
 export DEB_MAINT_PARAMS="\$*"
 
-# Tell initramfs builder whether it's wanted
-export INITRD=$want_initrd
+# Use raspberrypi defaults
+if [ -f /etc/default/raspberrypi-kernel ]; then
+  . /etc/default/raspberrypi-kernel
+  export INITRD=\${INITRD:-"No"}
+  export RPI_INITRD=\${RPI_INITRD:-"No"}
+fi
 
-test -d $debhookdir/$script.d && run-parts --arg="$version" --arg="/$installed_image_path" $debhookdir/$script.d
+EOF
+done
+
+cat <<EOF >> "$tmpdir/DEBIAN/postinst"
+if [ "\$1" = "configure" ]; then
+  tar --extract --xz --file=/lib/modules/$version/boot.txz --directory=/
+fi
+
+EOF
+
+for script in postinst postrm preinst prerm ; do
+	cat <<EOF >> "$tmpdir/DEBIAN/$script"
+if [ -d $debhookdir/$script.d ] ; then
+  run-parts --arg="$version" --arg="/$installed_image_path" $debhookdir/$script.d
+fi
+
 exit 0
 EOF
 	chmod 755 "$tmpdir/DEBIAN/$script"
@@ -228,6 +256,14 @@ else
        name="Anonymous"
 fi
 maintainer="$name <$email>"
+
+if [ -n "DEB$HOMEPAGE" ]; then
+        homepage=$DEBHOMEPAGE
+elif [ -n "$HOMEPAGE" ]; then
+        homepage=$HOMEPAGE
+else
+        homepage="http://www.kernel.org/"
+fi
 
 # Try to determine distribution
 if [ -n "$KDEB_CHANGELOG_DIST" ]; then
@@ -280,7 +316,7 @@ Section: kernel
 Priority: optional
 Maintainer: $maintainer
 Build-Depends: $build_depends
-Homepage: http://www.kernel.org/
+Homepage: $homepage
 EOF
 
 if [ "$ARCH" = "um" ]; then
@@ -303,6 +339,8 @@ else
 	cat <<EOF >> debian/control
 
 Package: $packagename
+Provides: linux-image
+Replaces: raspberrypi-kernel
 Architecture: any
 Description: Linux kernel, version $version
  This package contains the Linux kernel, modules and corresponding other
