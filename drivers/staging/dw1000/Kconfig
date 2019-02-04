@@ -1,0 +1,12 @@
+config DW1000
+	tristate "Support for Decawave DW1000 UWB module"
+	default n
+	depends on 6LOWPAN && IEEE802154_6LOWPAN
+	depends on m
+	select SYSFS
+	select PTP_1588_CLOCK
+	---help---
+	  If you have the Decawave DW1000 UWB radio module, say Y.
+
+	  If unsure, say N.
+
