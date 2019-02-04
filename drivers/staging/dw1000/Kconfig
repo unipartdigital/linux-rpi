@@ -1,0 +1,12 @@
+config DW1000
+	tristate "Support for Decawave DW1000 UWB module"
+	default n
+	depends on SPI && MAC802154
+	depends on m
+	select SYSFS
+	select PTP_1588_CLOCK
+	---help---
+	  If you have the Decawave DW1000 UWB radio module, say Y.
+
+	  This driver can also be built as a module. To do so, say M here.
+          The module will be called 'dw1000_mod'.
