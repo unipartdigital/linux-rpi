@@ -36,7 +36,7 @@
 #define DW1000_GPIO_LEDS
 
 /* Enable DW1000 voltage sanity check */
-#define DW1000_VOLTAGE_CHECK
+#undef DW1000_VOLTAGE_CHECK
 
 /* Enable DW1000 sync lost warnings */
 #undef DW1000_SYNC_LOST_WARN
@@ -1348,6 +1348,51 @@ static int dw1000_configure_smart_power(struct dw1000 *dw, bool smart_power)
 	return 0;
 }
 
+/**
+ * dw1000_configure_profile() - Configure calibration profile
+ *
+ * @dw:			DW1000 device
+ * @profile:		Calibration profile name
+ * @return:		0 on success or -errno
+ */
+static int dw1000_configure_profile(struct dw1000 *dw, const char *profile)
+{
+	struct dw1000_calib *calib = NULL;
+	bool smart_power;
+	int i;
+
+	/* Find a matching profile */
+	for (i=0; i<DW1000_MAX_CALIBS; i++) {
+		if (!strcmp(dw->calib[i].id, profile)) {
+			calib = &dw->calib[i];
+			break;
+		}
+	}
+	if (!calib) {
+		dev_warn(dw->dev, "calibration profile \"%s\" not found\n", profile);
+		return -EINVAL;
+	}
+
+	dev_info(dw->dev, "loading calibration profile \"%s\"\n", profile);
+
+	/* Enabled if tx power value is meaningful for smart power */
+	smart_power = !!(calib->power & 0xff000000);
+
+	/* Apply calibration values */
+	if (dw1000_configure_channel(dw, calib->ch) ||
+	    dw1000_configure_prf(dw, calib->prf) ||
+	    dw1000_configure_antd(dw, calib->antd) ||
+	    dw1000_configure_smart_power(dw, smart_power) ||
+	    dw1000_configure_tx_power(dw, calib->power)) {
+		dev_warn(dw->dev, "failure loading calibration profile \"%s\"\n", profile);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+
+
 /******************************************************************************
  *
  * PTP hardware clock
@@ -1674,14 +1719,14 @@ static void dw1000_rx_link_qual(struct dw1000 *dw)
 	/* Check it is really a new value */
 	if (unlikely(((cc - dw->rx_timestamp[hsrbp]) & DW1000_TIMESTAMP_MASK)
 		     < DW1000_TIMESTAMP_REPETITION_THRESHOLD)) {
-		dev_warn_ratelimited(dw->dev, "Frame repetition #0 detected\n");
+		dev_err_ratelimited(dw->dev, "frame repetition #0 detected\n");
 		rx->timestamp_valid = false;
 		rx->frame_valid = false;
 		goto invalid;
 	}
 	if (unlikely(((cc - dw->rx_timestamp[hsrbp^1]) & DW1000_TIMESTAMP_MASK)
 		     < DW1000_TIMESTAMP_REPETITION_THRESHOLD)) {
-		dev_err_ratelimited(dw->dev, "Frame repetition #1 detected\n");
+		dev_err_ratelimited(dw->dev, "frame repetition #1 detected\n");
 		rx->timestamp_valid = false;
 		rx->frame_valid = false;
 		goto invalid;
@@ -2536,7 +2581,7 @@ static int dw1000_set_hw_addr_filt(struct ieee802154_hw *hw,
 		if ((rc = regmap_raw_write(dw->eui.regs, 0, &filt->ieee_addr,
 					   sizeof(filt->ieee_addr))) != 0)
 			return rc;
-		dev_dbg(dw->dev, "set EUI64 %016llx\n",
+		dev_dbg(dw->dev, "set EUI-64 %016llx\n",
 			le64_to_cpu(filt->ieee_addr));
 	}
 
@@ -2704,6 +2749,42 @@ static const struct hwmon_chip_info dw1000_hwmon_chip = {
 
 #define DW1000_ATTR_RO(_name, _mode) \
 	DEVICE_ATTR(_name, _mode, dw1000_show_##_name, NULL)
+
+/* Calibration profile */
+static ssize_t dw1000_show_profile(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	struct dw1000 *dw = to_dw1000(dev);
+	struct dw1000_calib *cb;
+	int i, count = 0;
+
+	for (i=0; i<DW1000_MAX_CALIBS; i++) {
+		cb = &dw->calib[i];
+		if (cb->id[0])
+			count += sprintf(buf + count, "%s,%d,%d,0x%04x,0x%08x\n",
+					 cb->id, cb->ch, dw1000_prfs[cb->prf],
+					 cb->antd, cb->power);
+	}
+	return count;
+}
+static ssize_t dw1000_store_profile(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct dw1000 *dw = to_dw1000(dev);
+	char name[DW1000_CALIB_ID_LEN];
+	int rc, i;
+
+	for (i=0; i<(DW1000_CALIB_ID_LEN-1) && i<count && buf[i] != '\0' &&
+		     buf[i] != '\n' && buf[i] != '\t' && buf[i] != ' '; i++)
+		name[i] = buf[i];
+	name[i] = 0;
+
+	if ((rc = dw1000_configure_profile(dw, name)) != 0)
+		return rc;
+	return count;
+}
+static DW1000_ATTR_RW(profile, 0644);
 
 /* XTAL trim */
 static ssize_t dw1000_show_xtalt(struct device *dev,
@@ -3002,6 +3083,7 @@ static DW1000_ATTR_RW(noise_threshold, 0644);
 
 /* Attribute list */
 static struct attribute *dw1000_attrs[] = {
+	&dev_attr_profile.attr,
 	&dev_attr_xtalt.attr,
 	&dev_attr_channel.attr,
 	&dev_attr_pcode.attr,
@@ -3194,9 +3276,9 @@ static int dw1000_load_ldotune(struct dw1000 *dw)
 
 	/* Apply LDOTUNE calibration value, if applicable */
 	if (ldotune.raw[0]) {
-		dev_info(dw->dev, "set LDOTUNE %02x:%02x:%02x:%02x:%02x\n",
-			 ldotune.raw[4], ldotune.raw[3], ldotune.raw[2],
-			 ldotune.raw[1], ldotune.raw[0]);
+		dev_dbg(dw->dev, "set ldotune %02x:%02x:%02x:%02x:%02x\n",
+			ldotune.raw[4], ldotune.raw[3], ldotune.raw[2],
+			ldotune.raw[1], ldotune.raw[0]);
 		if ((rc = regmap_raw_write(dw->rf_conf.regs, DW1000_RF_LDOTUNE,
 					   &ldotune.raw,
 					   sizeof(ldotune.raw))) != 0)
@@ -3282,7 +3364,7 @@ static int dw1000_load_delays(struct dw1000 *dw)
 		dw->antd[DW1000_PRF_64M] = array[1];
 	}
 
-	dev_dbg(dw->dev, "set antenna delays 0x%04x,0x%04x\n",
+	dev_dbg(dw->dev, "set default antenna delays 0x%04x,0x%04x\n",
 		dw->antd[DW1000_PRF_16M], dw->antd[DW1000_PRF_64M]);
 	return 0;
 }
@@ -3361,6 +3443,70 @@ static int dw1000_load_lde(struct dw1000 *dw)
 }
 
 /**
+ * dw1000_load_profiles() - Load configuration profiles
+ *
+ * @dw:			DW1000 device
+ * @return:		0 on success or -errno
+ */
+static int dw1000_load_profiles(struct dw1000 *dw)
+{
+	struct device_node *node, *np = NULL;
+	const char *name, *profile;
+	int ch, prf, prfd, antd, power;
+	int pid = 0;
+
+	/* Find the calibration node */
+	node = of_find_node_by_name(dw->dev->of_node, "decawave,calib");
+	if (!node) {
+		dev_dbg(dw->dev, "no calibration sets in device tree\n");
+		return 0;
+	}
+
+	/* Iterate through calibrations */
+	while ((pid < DW1000_MAX_CALIBS) && (np = of_get_next_child(node,np))) {
+		if (!strcmp(np->name, "calib")) {
+			if (of_property_read_string(np, "id", &name) ||
+			    of_property_read_u32(np, "ch", &ch) ||
+			    of_property_read_u32(np, "prf", &prfd) ||
+			    of_property_read_u32(np, "antd", &antd) ||
+			    of_property_read_u32(np, "power", &power))
+				goto error;
+
+			prf = dw1000_lookup_prf(prfd);
+			if (prf < 0)
+				goto error;
+			if (!(BIT(ch) & DW1000_CHANNELS))
+				goto error;
+			if (antd & ~DW1000_ANTD_MASK)
+				goto error;
+
+			dev_dbg(dw->dev, "profile %s: %d,%d,0x%04x,0x%08x\n",
+				name, ch, prfd, antd, power);
+
+			strncpy(dw->calib[pid].id, name, DW1000_CALIB_ID_LEN-1);
+			dw->calib[pid].ch = ch;
+			dw->calib[pid].prf = prf;
+			dw->calib[pid].antd = antd;
+			dw->calib[pid].power = power;
+
+			pid++;
+			continue;
+		}
+ error:
+		dev_warn(dw->dev, "failure reading \"%s\"\n", np->full_name);
+	}
+
+	of_node_put(node);
+
+	/* Default profile */
+	if (of_property_read_string(dw->dev->of_node, "decawave,default", &profile) == 0) {
+		dw1000_configure_profile(dw,profile);
+	}
+
+	return 0;
+}
+
+/**
  * dw1000_init() - Apply initial configuration
  *
  * @dw:			DW1000 device
@@ -3378,7 +3524,7 @@ static int dw1000_init(struct dw1000 *dw)
 	if ((rc = regmap_read(dw->dev_id.regs, DW1000_MODELVERREV,
 			      &modelverrev)) != 0)
 		return rc;
-	dev_info(dw->dev, "found model %d.%d.%d\n",
+	dev_info(dw->dev, "DW1000 revision %d.%d.%d detected\n",
 		 DW1000_MODELVERREV_MODEL(modelverrev),
 		 DW1000_MODELVERREV_VER(modelverrev),
 		 DW1000_MODELVERREV_REV(modelverrev));
@@ -3458,16 +3604,20 @@ static int dw1000_init(struct dw1000 *dw)
 	if ((rc = dw1000_load_ldotune(dw)) != 0)
 		return rc;
 
+	/* Load SAR ADC calibration values */
+	if ((rc = dw1000_load_sar(dw)) != 0)
+		return rc;
+
 	/* Load EUI-64 address */
 	if ((rc = dw1000_load_eui64(dw)) != 0)
 		return rc;
 
-	/* Load antenna delays */
+	/* Load default antenna delays */
 	if ((rc = dw1000_load_delays(dw)) != 0)
 		return rc;
 
-	/* Load SAR ADC calibration values */
-	if ((rc = dw1000_load_sar(dw)) != 0)
+	/* Load profile calibration values */
+	if ((rc = dw1000_load_profiles(dw)) != 0)
 		return rc;
 
 	/* Load LDE microcode */
@@ -3592,7 +3742,7 @@ static int dw1000_probe(struct spi_device *spi)
 
 	/* Add attribute group */
 	if ((rc = sysfs_create_group(&dw->dev->kobj, &dw1000_attr_group)) != 0){
-		dev_err(dw->dev, "could not create attributes: %d\n", rc);
+		dev_err(dw->dev, "could not create sysfs attributes: %d\n", rc);
 		goto err_create_group;
 	}
 
@@ -3629,7 +3779,7 @@ static int dw1000_probe(struct spi_device *spi)
 
 	/* Register IEEE 802.15.4 device */
 	if ((rc = ieee802154_register_hw(hw)) != 0) {
-		dev_err(dw->dev, "could not register: %d\n", rc);
+		dev_err(dw->dev, "could not register IEEE 802.15.4 device: %d\n", rc);
 		goto err_register_hw;
 	}
 
