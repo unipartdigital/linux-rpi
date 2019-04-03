@@ -1,0 +1,40 @@
+variables:
+  FLAGS: ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
+  KDEB_PKGVERSION: 1.20-CI
+  GIT_DEPTH: "1"
+
+stages:
+  - build image
+  - build kernel
+
+
+build image:
+  stage: build image
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  only:
+    changes:
+      - Dockerfile
+  before_script:
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+  script:
+    - /kaniko/executor
+      --context $CI_PROJECT_DIR
+      --dockerfile $CI_PROJECT_DIR/Dockerfile
+      --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+
+
+build kernel:
+  image: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+  stage: build kernel
+  script:
+    - make tail_defconfig $FLAGS
+    - make $FLAGS -j2
+    - make KDEB_PKGVERSION=$KDEB_PKGVERSION KDEB_CHANGELOG_DIST='raspbian' DEBEMAIL='support@unipart.io' DEBFULLNAME='Unipart Digital' DEBHOMEPAGE='https://github.com/unipartdigital/linux-rpi' bindeb-pkg $FLAGS -j2
+    - mv ../*.deb .
+    - mv ../*.changes .
+  artifacts:
+    paths:
+      - ./*.deb
+      - ./*.changes
