@@ -1544,11 +1544,11 @@ static int dw1000_configure_frame_filter(struct dw1000 *dw, unsigned int filter)
  * @profile:		Calibration profile name
  * @return:		0 on success or -errno
  */
-static int dw1000_configure_profile(struct dw1000 *dw, const char *profile)
+static int dw1000_configure_profile(struct dw1000 *dw, const char *profile, bool load)
 {
 	struct dw1000_config *cfg = &dw->cfg;
 	struct dw1000_calib *calib = NULL;
-	int rc;
+	int rc = 0;
 	int i;
 
 	/* Find a matching profile */
@@ -1574,8 +1574,7 @@ static int dw1000_configure_profile(struct dw1000 *dw, const char *profile)
 		DW1000_CONFIGURE_CHANNEL |
 		DW1000_CONFIGURE_PRF |
 		DW1000_CONFIGURE_ANTD |
-		DW1000_CONFIGURE_TX_POWER |
-		DW1000_CONFIGURE_SMART_POWER;
+		DW1000_CONFIGURE_TX_POWER;
 
 	/* Set channel in the 802.15.4 stack */
 	dw->hw->phy->current_channel = calib->ch;
@@ -1588,13 +1587,13 @@ static int dw1000_configure_profile(struct dw1000 *dw, const char *profile)
 	cfg->txpwr[1] = (calib->power >>  8) & 0xff;
 	cfg->txpwr[2] = (calib->power >> 16) & 0xff;
 	cfg->txpwr[3] = (calib->power >> 24) & 0xff;
-	cfg->smart_power = !!(calib->power & 0xff000000);
 
 	/* Unlock configuration */
 	mutex_unlock(&cfg->mutex);
 
 	/* Reconfigure changes */
-	rc = dw1000_reconfigure(dw);
+	if (load)
+		rc = dw1000_reconfigure(dw);
 	
 	return rc;
 }
@@ -3098,7 +3097,7 @@ static ssize_t dw1000_store_profile(struct device *dev,
 		name[i] = buf[i];
 	name[i] = 0;
 
-	if ((rc = dw1000_configure_profile(dw, name)) != 0)
+	if ((rc = dw1000_configure_profile(dw, name, true)) != 0)
 		return rc;
 	return count;
 }
@@ -4230,7 +4229,7 @@ static int dw1000_load_profiles(struct dw1000 *dw)
 	/* Default profile */
 	if (of_property_read_string(dw->dev->of_node,
 				    "decawave,default", &profile) == 0) {
-		dw1000_configure_profile(dw,profile);
+		dw1000_configure_profile(dw,profile,false);
 	}
 
 	return 0;
