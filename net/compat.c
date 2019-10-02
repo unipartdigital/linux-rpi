@@ -24,6 +24,7 @@
 #include <linux/security.h>
 #include <linux/audit.h>
 #include <linux/export.h>
+#include <linux/errqueue.h>
 
 #include <net/scm.h>
 #include <net/sock.h>
@@ -210,7 +211,7 @@ int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *dat
 	struct compat_cmsghdr __user *cm = (struct compat_cmsghdr __user *) kmsg->msg_control;
 	struct compat_cmsghdr cmhdr;
 	struct compat_timeval ctv;
-	struct compat_timespec cts[3];
+	struct compat_scm_timestamping cts;
 	int cmlen;
 
 	if (cm == NULL || kmsg->msg_controllen < sizeof(*cm)) {
@@ -230,13 +231,21 @@ int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *dat
 		    (type == SCM_TIMESTAMPNS || type == SCM_TIMESTAMPING)) {
 			int count = type == SCM_TIMESTAMPNS ? 1 : 3;
 			int i;
-			struct timespec *ts = (struct timespec *)data;
+			struct scm_timestamping *ts =
+				(struct scm_timestamping *)data;
 			for (i = 0; i < count; i++) {
-				cts[i].tv_sec = ts[i].tv_sec;
-				cts[i].tv_nsec = ts[i].tv_nsec;
+				cts.ts[i].tv_sec = ts->ts[i].tv_sec;
+				cts.ts[i].tv_nsec = ts->ts[i].tv_nsec;
 			}
 			data = &cts;
-			len = sizeof(cts[0]) * count;
+			if (type == SCM_TIMESTAMPNS) {
+				len = sizeof(cts.ts[0]);
+			} else {
+				memcpy(cts.tsh, ts->tsh, sizeof(cts.tsh));
+				memcpy(cts.hwtsinfo, ts->hwtsinfo,
+				       sizeof(cts.hwtsinfo));
+				len = sizeof(cts);
+			}
 		}
 	}
 

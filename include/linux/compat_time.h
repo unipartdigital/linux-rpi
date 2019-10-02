@@ -22,6 +22,12 @@ struct compat_itimerspec {
 	struct compat_timespec it_value;
 };
 
+struct compat_scm_timestamping {
+	struct compat_timespec ts[3];
+	struct timehires tsh[1];
+	u8 hwtsinfo[64];
+};
+
 extern int compat_get_timespec64(struct timespec64 *, const void __user *);
 extern int compat_put_timespec64(const struct timespec64 *, void __user *);
 extern int get_compat_itimerspec64(struct itimerspec64 *its,
