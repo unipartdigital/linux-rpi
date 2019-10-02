@@ -24,6 +24,7 @@
 #include <linux/security.h>
 #include <linux/audit.h>
 #include <linux/export.h>
+#include <linux/errqueue.h>
 
 #include <net/scm.h>
 #include <net/sock.h>
@@ -210,7 +211,7 @@ int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *dat
 	struct compat_cmsghdr __user *cm = (struct compat_cmsghdr __user *) kmsg->msg_control;
 	struct compat_cmsghdr cmhdr;
 	struct compat_timeval ctv;
-	struct compat_timespec cts[3];
+	struct compat_scm_timestamping cts;
 	int cmlen;
 
 	if (cm == NULL || kmsg->msg_controllen < sizeof(*cm)) {
@@ -226,17 +227,30 @@ int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *dat
 			data = &ctv;
 			len = sizeof(ctv);
 		}
-		if (level == SOL_SOCKET &&
-		    (type == SCM_TIMESTAMPNS || type == SCM_TIMESTAMPING)) {
-			int count = type == SCM_TIMESTAMPNS ? 1 : 3;
-			int i;
-			struct timespec *ts = (struct timespec *)data;
-			for (i = 0; i < count; i++) {
-				cts[i].tv_sec = ts[i].tv_sec;
-				cts[i].tv_nsec = ts[i].tv_nsec;
-			}
+		if (level == SOL_SOCKET && type== SCM_TIMESTAMPNS) {
+			struct scm_timestamping *ts =
+				(struct scm_timestamping *)data;
+			cts.ts[0].tv_sec = ts->ts[0].tv_sec;
+			cts.ts[0].tv_nsec = ts->ts[0].tv_nsec;
 			data = &cts;
-			len = sizeof(cts[0]) * count;
+			len = sizeof(cts.ts[0]);
+		}
+		if (level == SOL_SOCKET && type == SCM_TIMESTAMPING) {
+			struct scm_timestamping *ts =
+				(struct scm_timestamping *)data;
+			int i;
+			for (i = 0; i < 3; i++) {
+				cts.ts[i].tv_sec = ts->ts[i].tv_sec;
+				cts.ts[i].tv_nsec = ts->ts[i].tv_nsec;
+			}
+#ifdef HAVE_TIMEHIRES
+			memcpy(cts.tsh, ts->tsh, sizeof(cts.tsh));
+#endif
+#ifdef HAVE_HWTSINFO
+			memcpy(cts.hwtsinfo, ts->hwtsinfo, sizeof(cts.hwtsinfo));
+#endif
+			data = &cts;
+			len = sizeof(cts);
 		}
 	}
 
