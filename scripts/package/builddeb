@@ -94,6 +94,12 @@ if grep -q "^CONFIG_OF=y" $KCONFIG_CONFIG ; then
 	fi
 fi
 
+if [ -d "$tmpdir/boot/broadcom" ]
+then
+	mv $tmpdir/boot/broadcom/*.dtb $tmpdir/boot/
+	rm -fr $tmpdir/boot/broadcom
+fi
+
 bootfiles=$(cd "$tmpdir" && find boot -type f | sort)
 tar --create --xz --file="$tmpdir/lib/modules/$version/boot.txz" --directory="$tmpdir" $bootfiles
 rm -rf "$tmpdir/boot"
