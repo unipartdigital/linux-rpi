@@ -1223,6 +1223,61 @@ static int dw1000_load_config(struct dw1000 *dw)
 }
 
 /**
+ * dw1000_load_profile() - Load calibration profile
+ *
+ * @dw:			DW1000 device
+ * @return:		0 on success or -errno
+ */
+static int dw1000_load_profile(struct dw1000 *dw, const char *profile)
+{
+	struct dw1000_config *cfg = &dw->cfg;
+	struct dw1000_calib *calib = NULL;
+	int i;
+
+	/* Find a matching profile */
+	for (i=0; i<DW1000_MAX_CALIBS; i++) {
+		if (!strcmp(dw->calib[i].id, profile)) {
+			calib = &dw->calib[i];
+			break;
+		}
+	}
+	if (!calib) {
+		dev_warn(dw->dev, "calibration profile \"%s\" not found\n",
+			 profile);
+		return -EINVAL;
+	}
+
+	dev_info(dw->dev, "loading calibration profile \"%s\"\n", profile);
+
+	/* Lock configuration */
+	mutex_lock(&cfg->mutex);
+
+	/* Set changed parameters */
+	cfg->pending |=
+		DW1000_CONFIGURE_CHANNEL |
+		DW1000_CONFIGURE_PRF |
+		DW1000_CONFIGURE_ANTD |
+		DW1000_CONFIGURE_TX_POWER;
+
+	/* Set channel in the 802.15.4 stack */
+	dw->hw->phy->current_channel = calib->ch;
+
+	/* Record values */
+	cfg->channel = calib->ch;
+	cfg->prf = calib->prf;
+	cfg->antd[cfg->prf] = calib->antd;
+	cfg->txpwr[0] = (calib->power >>  0) & 0xff;
+	cfg->txpwr[1] = (calib->power >>  8) & 0xff;
+	cfg->txpwr[2] = (calib->power >> 16) & 0xff;
+	cfg->txpwr[3] = (calib->power >> 24) & 0xff;
+
+	/* Unlock configuration */
+	mutex_unlock(&cfg->mutex);
+
+	return 0;
+}
+
+/**
  * dw1000_reconfigure() - Reconfigure radio parameters
  *
  * @dw:			DW1000 device
@@ -1544,56 +1599,16 @@ static int dw1000_configure_frame_filter(struct dw1000 *dw, unsigned int filter)
  * @profile:		Calibration profile name
  * @return:		0 on success or -errno
  */
-static int dw1000_configure_profile(struct dw1000 *dw, const char *profile, bool load)
+static int dw1000_configure_profile(struct dw1000 *dw, const char *profile)
 {
-	struct dw1000_config *cfg = &dw->cfg;
-	struct dw1000_calib *calib = NULL;
-	int rc = 0;
-	int i;
-
-	/* Find a matching profile */
-	for (i=0; i<DW1000_MAX_CALIBS; i++) {
-		if (!strcmp(dw->calib[i].id, profile)) {
-			calib = &dw->calib[i];
-			break;
-		}
-	}
-	if (!calib) {
-		dev_warn(dw->dev, "calibration profile \"%s\" not found\n",
-			 profile);
-		return -EINVAL;
-	}
-
-	dev_info(dw->dev, "loading calibration profile \"%s\"\n", profile);
-
-	/* Lock configuration */
-	mutex_lock(&cfg->mutex);
-
-	/* Set changed parameters */
-	cfg->pending |=
-		DW1000_CONFIGURE_CHANNEL |
-		DW1000_CONFIGURE_PRF |
-		DW1000_CONFIGURE_ANTD |
-		DW1000_CONFIGURE_TX_POWER;
-
-	/* Set channel in the 802.15.4 stack */
-	dw->hw->phy->current_channel = calib->ch;
+	int rc;
 	
-	/* Record values */
-	cfg->channel = calib->ch;
-	cfg->prf = calib->prf;
-	cfg->antd[cfg->prf] = calib->antd;
-	cfg->txpwr[0] = (calib->power >>  0) & 0xff;
-	cfg->txpwr[1] = (calib->power >>  8) & 0xff;
-	cfg->txpwr[2] = (calib->power >> 16) & 0xff;
-	cfg->txpwr[3] = (calib->power >> 24) & 0xff;
-
-	/* Unlock configuration */
-	mutex_unlock(&cfg->mutex);
+	/* Load calibration profile */
+	if ((rc = dw1000_load_profile(dw, profile)) != 0)
+		return rc;
 
 	/* Reconfigure changes */
-	if (load)
-		rc = dw1000_reconfigure(dw);
+	rc = dw1000_reconfigure(dw);
 	
 	return rc;
 }
@@ -3097,7 +3112,7 @@ static ssize_t dw1000_store_profile(struct device *dev,
 		name[i] = buf[i];
 	name[i] = 0;
 
-	if ((rc = dw1000_configure_profile(dw, name, true)) != 0)
+	if ((rc = dw1000_configure_profile(dw, name)) < 0)
 		return rc;
 	return count;
 }
@@ -3119,9 +3134,9 @@ static ssize_t dw1000_store_xtalt(struct device *dev,
 	unsigned int trim;
 	int rc;
 
-	if ((rc = kstrtouint(buf, 0, &trim)) != 0)
+	if ((rc = kstrtouint(buf, 0, &trim)) < 0)
 		return rc;
-	if ((rc = dw1000_configure_xtalt(dw, trim)) != 0)
+	if ((rc = dw1000_configure_xtalt(dw, trim)) < 0)
 		return rc;
 	return count;
 }
@@ -3143,9 +3158,9 @@ static ssize_t dw1000_store_channel(struct device *dev,
 	int channel;
 	int rc;
 
-	if ((rc = kstrtoint(buf, 0, &channel)) != 0)
+	if ((rc = kstrtoint(buf, 0, &channel)) < 0)
 		return rc;
-	if ((rc = dw1000_configure_channel(dw, channel)) != 0)
+	if ((rc = dw1000_configure_channel(dw, channel)) < 0)
 		return rc;
 	return count;
 }
@@ -3167,9 +3182,9 @@ static ssize_t dw1000_store_pcode(struct device *dev,
 	int pcode;
 	int rc;
 
-	if ((rc = kstrtoint(buf, 0, &pcode)) != 0)
+	if ((rc = kstrtoint(buf, 0, &pcode)) < 0)
 		return rc;
-	if ((rc = dw1000_configure_pcode(dw, pcode)) != 0)
+	if ((rc = dw1000_configure_pcode(dw, pcode)) < 0)
 		return rc;
 	return count;
 }
@@ -3192,11 +3207,11 @@ static ssize_t dw1000_store_prf(struct device *dev,
 	int prf;
 	int rc;
 
-	if ((rc = kstrtoint(buf, 0, &raw)) != 0)
+	if ((rc = kstrtoint(buf, 0, &raw)) < 0)
 		return rc;
 	if ((prf = dw1000_lookup_prf(raw)) < 0)
 		return prf;
-	if ((rc = dw1000_configure_prf(dw, prf)) != 0)
+	if ((rc = dw1000_configure_prf(dw, prf)) < 0)
 		return rc;
 	return count;
 }
@@ -3218,9 +3233,9 @@ static ssize_t dw1000_store_antd(struct device *dev,
 	unsigned int delay;
 	int rc;
 
-	if ((rc = kstrtouint(buf, 0, &delay)) != 0)
+	if ((rc = kstrtouint(buf, 0, &delay)) < 0)
 		return rc;
-	if ((rc = dw1000_configure_antd(dw, delay)) != 0)
+	if ((rc = dw1000_configure_antd(dw, delay)) < 0)
 		return rc;
 	return count;
 }
@@ -3242,11 +3257,11 @@ static ssize_t dw1000_store_rate(struct device *dev,
 	int raw, rate;
 	int rc;
 
-	if ((rc = kstrtoint(buf, 0, &raw)) != 0)
+	if ((rc = kstrtoint(buf, 0, &raw)) < 0)
 		return rc;
 	if ((rate = dw1000_lookup_rate(raw)) < 0)
 		return rate;
-	if ((rc = dw1000_configure_rate(dw, rate)) != 0)
+	if ((rc = dw1000_configure_rate(dw, rate)) < 0)
 		return rc;
 	return count;
 }
@@ -3270,11 +3285,11 @@ static ssize_t dw1000_store_txpsr(struct device *dev,
 	int txpsr;
 	int rc;
 
-	if ((rc = kstrtoint(buf, 0, &raw)) != 0)
+	if ((rc = kstrtoint(buf, 0, &raw)) < 0)
 		return rc;
 	if ((txpsr = dw1000_lookup_txpsr(raw)) < 0)
 		return txpsr;
-	if ((rc = dw1000_configure_txpsr(dw, txpsr)) != 0)
+	if ((rc = dw1000_configure_txpsr(dw, txpsr)) < 0)
 		return rc;
 	return count;
 }
@@ -3299,9 +3314,9 @@ static ssize_t dw1000_store_tx_power(struct device *dev,
 	unsigned power;
 	int rc;
 
-	if ((rc = kstrtouint(buf, 0, &power)) != 0)
+	if ((rc = kstrtouint(buf, 0, &power)) < 0)
 		return rc;
-	if ((rc = dw1000_configure_tx_power(dw, power)) != 0)
+	if ((rc = dw1000_configure_tx_power(dw, power)) < 0)
 		return rc;
 	return count;
 }
@@ -3323,9 +3338,9 @@ static ssize_t dw1000_store_smart_power(struct device *dev,
 	bool smart_power;
 	int rc;
 
-	if (strtobool(buf, &smart_power) < 0)
-		return -EINVAL;
-	if ((rc = dw1000_configure_smart_power(dw, smart_power)) != 0)
+	if ((rc = strtobool(buf, &smart_power)) < 0)
+		return rc;
+	if ((rc = dw1000_configure_smart_power(dw, smart_power)) < 0)
 		return rc;
 	return count;
 }
@@ -3349,9 +3364,9 @@ static ssize_t dw1000_store_frame_filter(struct device *dev,
 	unsigned int filter;
 	int rc;
 	
-	if ((rc = kstrtouint(buf, 0, &filter)) != 0)
+	if ((rc = kstrtouint(buf, 0, &filter)) < 0)
 		return rc;
-	if ((rc = dw1000_configure_frame_filter(dw, filter)) != 0)
+	if ((rc = dw1000_configure_frame_filter(dw, filter)) < 0)
 		return rc;
 	return count;
 }
@@ -3375,7 +3390,7 @@ static ssize_t dw1000_store_snr_threshold(struct device *dev,
 	unsigned int snr_threshold;
 	int rc;
 	
-	if ((rc = kstrtouint(buf, 0, &snr_threshold)) != 0)
+	if ((rc = kstrtouint(buf, 0, &snr_threshold)) < 0)
 		return rc;
 	dw->snr_threshold = snr_threshold;
 	return count;
@@ -3399,7 +3414,7 @@ static ssize_t dw1000_store_fpr_threshold(struct device *dev,
 	unsigned int fpr_threshold;
 	int rc;
 	
-	if ((rc = kstrtouint(buf, 0, &fpr_threshold)) != 0)
+	if ((rc = kstrtouint(buf, 0, &fpr_threshold)) < 0)
 		return rc;
 	dw->fpr_threshold = fpr_threshold;
 	return count;
@@ -3423,7 +3438,7 @@ static ssize_t dw1000_store_noise_threshold(struct device *dev,
 	unsigned int noise_threshold;
 	int rc;
 	
-	if ((rc = kstrtouint(buf, 0, &noise_threshold)) != 0)
+	if ((rc = kstrtouint(buf, 0, &noise_threshold)) < 0)
 		return rc;
 	dw->noise_threshold = noise_threshold;
 	return count;
@@ -3447,7 +3462,7 @@ static ssize_t dw1000_store_stats_interval(struct device *dev,
 	unsigned int interval;
 	int rc;
 	
-	if ((rc = kstrtouint(buf, 0, &interval)) != 0)
+	if ((rc = kstrtouint(buf, 0, &interval)) < 0)
 		return rc;
 	dw->stats.interval = interval;
 	if (interval > 0)
@@ -3483,7 +3498,7 @@ static ssize_t dw1000_store_error_inject(struct device *dev,
 	if (!error)
 		return -EINVAL;
 	if (*col) {
-		if ((rc = kstrtoint(col+1, 0, &value)) != 0)
+		if ((rc = kstrtoint(col+1, 0, &value)) < 0)
 			return rc;
 	}
 	
@@ -3584,7 +3599,7 @@ static ssize_t dw1000_store_dw1000_##_name(struct device *dev,                \
         struct dw1000 *dw = dev_to_dw1000(dev);                               \
         unsigned int value;                                                   \
         int rc;                                                               \
-        if ((rc = kstrtouint(buf, 0, &value)) != 0)                           \
+        if ((rc = kstrtouint(buf, 0, &value)) < 0)                            \
                 return rc;                                                    \
         dw->stats.count[DW1000_STATS_##_enum] = value;                        \
         return count;                                                         \
@@ -4170,12 +4185,12 @@ static int dw1000_load_lde(struct dw1000 *dw)
 }
 
 /**
- * dw1000_load_profiles() - Load configuration profiles
+ * dw1000_load_calibrations() - Load calibration profiles
  *
  * @dw:			DW1000 device
  * @return:		0 on success or -errno
  */
-static int dw1000_load_profiles(struct dw1000 *dw)
+static int dw1000_load_calibrations(struct dw1000 *dw)
 {
 	struct device_node *node, *np = NULL;
 	const char *name, *profile;
@@ -4229,7 +4244,8 @@ static int dw1000_load_profiles(struct dw1000 *dw)
 	/* Default profile */
 	if (of_property_read_string(dw->dev->of_node,
 				    "decawave,default", &profile) == 0) {
-		dw1000_configure_profile(dw,profile,false);
+		/* Ignore errors */
+		dw1000_load_profile(dw,profile);
 	}
 
 	return 0;
@@ -5069,8 +5085,8 @@ static int dw1000_spi_probe(struct spi_device *spi)
 		dev_err(dw->dev, "Load OTP/DT delays failed: %d\n", rc);
 		goto err_load_otp;
 	}
-	if ((rc = dw1000_load_profiles(dw)) != 0) {
-		dev_err(dw->dev, "Load OTP/DT profiles failed: %d\n", rc);
+	if ((rc = dw1000_load_calibrations(dw)) != 0) {
+		dev_err(dw->dev, "Load OTP/DT calibrations failed: %d\n", rc);
 		goto err_load_otp;
 	}
 	
