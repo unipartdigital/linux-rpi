@@ -719,6 +719,7 @@ static int bcm2835_spi_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, master);
 
+	master->rt = true;
 	master->mode_bits = BCM2835_SPI_MODE_BITS;
 	master->bits_per_word_mask = SPI_BPW_MASK(8);
 	master->num_chipselect = 3;

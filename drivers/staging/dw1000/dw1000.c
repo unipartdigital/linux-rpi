@@ -4464,9 +4464,7 @@ static void dw1000_hard_reset(struct dw1000 *dw)
 static int dw1000_state_init(struct dw1000 *dw)
 {
 	struct dw1000_state *stm = &dw->stm;
-	struct sched_param sched_par = {
-		.sched_priority = MAX_RT_PRIO - 2
-	};
+	struct sched_param sched_par = { .sched_priority = 90 };
 	
 	/* Clear memory */
 	memset(stm,0,sizeof(*stm));
